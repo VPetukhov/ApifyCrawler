@@ -42,6 +42,7 @@
     "requestTimeoutSecs": {
       "title": "Request timeout (seconds)",
       "type": "integer",
+      "description": "Maximum time to allow an individual request handler to run before it is aborted.",
       "default": 90,
       "minimum": 15,
       "maximum": 300
@@ -49,6 +50,7 @@
     "navigationTimeoutSecs": {
       "title": "Navigation timeout (seconds)",
       "type": "integer",
+      "description": "Maximum time to wait for page navigations and loads triggered by Playwright.",
       "default": 60,
       "minimum": 15,
       "maximum": 180
@@ -56,6 +58,7 @@
     "maxRequestRetries": {
       "title": "Max request retries",
       "type": "integer",
+      "description": "How many times Crawlee should retry a failed request before marking it as failed.",
       "default": 6,
       "minimum": 0,
       "maximum": 20
@@ -69,16 +72,19 @@
     "useSessionPool": {
       "title": "Use session pool",
       "type": "boolean",
+      "description": "Enable Crawlee session management so cookies and blocking state can be tracked across requests.",
       "default": true
     },
     "persistCookiesPerSession": {
       "title": "Persist cookies per session",
       "type": "boolean",
+      "description": "Keep cookies attached to each session so logged-in or consent state survives across requests.",
       "default": true
     },
     "maxSessionRotations": {
       "title": "Max session rotations",
       "type": "integer",
+      "description": "Maximum number of times a request can switch to a new session before it is considered exhausted.",
       "default": 12,
       "minimum": 0,
       "maximum": 50
