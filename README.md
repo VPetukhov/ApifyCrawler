@@ -130,4 +130,4 @@ sudo npx playwright install-deps chromium
 
 - Public Instagram structure changes often. This Actor first captures JSON responses from the browser session and then falls back to DOM / downloaded-page heuristics when needed.
 - Post comment extraction is based on what is visibly rendered in the browser session. The actor clicks comment expansion controls and scrolls comment containers to pull in additional visible comments before extraction.
-- For private profiles or stronger login walls, provide `initialCookies` from a logged-in Instagram session.
+- For private profiles, stronger login walls, or deeper comment access, provide `initialCookies` or `cookieString` from a logged-in Instagram session.

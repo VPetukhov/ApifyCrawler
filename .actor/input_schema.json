@@ -92,6 +92,12 @@
         "type": "object"
       }
     },
+    "cookieString": {
+      "title": "Cookie string",
+      "type": "string",
+      "description": "Optional raw Instagram Cookie header from a logged-in browser session. Easier alternative to initialCookies when you need more post comments.",
+      "editor": "textarea"
+    },
     "overrideUserAgent": {
       "title": "Override user agent",
       "type": "string",

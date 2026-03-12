@@ -46,6 +46,7 @@ interface ActorInput {
     persistCookiesPerSession?: boolean;
     maxSessionRotations?: number;
     initialCookies?: InputCookie[];
+    cookieString?: string;
     overrideUserAgent?: string;
     includeRecentPosts?: boolean;
     maxRecentPosts?: number;
@@ -90,7 +91,7 @@ try {
     const maxRecentPosts = input.maxRecentPosts ?? 12;
     const includeVisibleComments = input.includeVisibleComments ?? true;
     const maxVisibleComments = input.maxVisibleComments;
-    const initialCookies = normalizeCookies(input.initialCookies);
+    const initialCookies = normalizeCookies(input.initialCookies, input.cookieString);
 
     const crawler = new PlaywrightCrawler({
         proxyConfiguration,
@@ -246,6 +247,7 @@ try {
                     throw new Error(failureHint.message);
                 }
 
+                const commentFetchRestricted = detectLoggedOutCommentRestriction(pageState.responses);
                 const result = {
                     targetType: 'post',
                     inputUrl: target.originalUrl,
@@ -272,6 +274,10 @@ try {
                     visibleCommentsCount: extractedPost.visibleComments?.length ?? 0,
                     visibleCommentsStatus: visibleCommentsLoadResult.status,
                     visibleCommentsCandidatesSeen: visibleCommentsLoadResult.visibleCandidateCount,
+                    commentFetchRestricted,
+                    commentFetchRestrictionReason: commentFetchRestricted
+                        ? 'unauthorized-logged-out-query'
+                        : undefined,
                     loginWallDetected: visibleCommentsLoadResult.limitedByLoginWall,
                     extractionSource: extractedPost.source,
                     extractionPath: extractedPost.sourcePath,
@@ -398,8 +404,13 @@ function buildTargets(input: ActorInput): NormalizedInstagramTarget[] {
     return normalizedTargets.slice(0, maxItems);
 }
 
-function normalizeCookies(cookies: InputCookie[] | undefined): BrowserContextCookie[] {
-    return (cookies ?? []).map((cookie) => {
+function normalizeCookies(cookies: InputCookie[] | undefined, cookieString: string | undefined): BrowserContextCookie[] {
+    const mergedCookies = [
+        ...(cookies ?? []),
+        ...parseCookieString(cookieString),
+    ];
+
+    const normalizedCookies = mergedCookies.map((cookie) => {
         const normalizedCookie: BrowserContextCookie = {
             name: cookie.name,
             value: cookie.value,
@@ -415,6 +426,50 @@ function normalizeCookies(cookies: InputCookie[] | undefined): BrowserContextCoo
 
         return normalizedCookie;
     });
+
+    const deduped = new Map<string, BrowserContextCookie>();
+    for (const cookie of normalizedCookies) {
+        const key = `${cookie.name}:${cookie.domain ?? cookie.url ?? ''}:${cookie.path ?? ''}`;
+        deduped.set(key, cookie);
+    }
+
+    return Array.from(deduped.values());
+}
+
+function parseCookieString(cookieString: string | undefined): InputCookie[] {
+    if (!cookieString) {
+        return [];
+    }
+
+    const parsedCookies: Array<InputCookie | null> = cookieString
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => {
+            const separatorIndex = part.indexOf('=');
+            if (separatorIndex <= 0) {
+                return null;
+            }
+
+            const name = part.slice(0, separatorIndex).trim();
+            const value = part.slice(separatorIndex + 1).trim();
+            if (!name || !value) {
+                return null;
+            }
+
+            return {
+                name,
+                value,
+                domain: '.instagram.com',
+                path: '/',
+                secure: true,
+                httpOnly: false,
+                sameSite: 'Lax' as const,
+            } satisfies InputCookie;
+        })
+        ;
+
+    return parsedCookies.filter((cookie): cookie is InputCookie => cookie !== null);
 }
 
 function ensurePageState(page: Page): PageState {
@@ -488,16 +543,67 @@ function shouldInspectResponse(response: Response): boolean {
         return false;
     }
 
-    const contentType = response.headers()['content-type'] ?? '';
-    if (!contentType.includes('application/json') && resourceType !== 'document') {
+    const contentType = (response.headers()['content-type'] ?? '').toLowerCase();
+    const hasJsonLikeContentType = contentType.includes('application/json')
+        || contentType.includes('text/javascript')
+        || contentType.includes('application/x-javascript')
+        || contentType.includes('text/x-javascript');
+
+    if (!hasJsonLikeContentType && resourceType !== 'document') {
         return false;
     }
 
-    return /web_profile_info|graphql|api\/v1|profile|user|media|comment|post|reel/i.test(url);
+    return /web_profile_info|graphql|ajax\/bz|api\/v1|profile|user|media|comment|post|reel/i.test(url);
 }
 
 function looksLikeRelevantPayload(body: string): boolean {
-    return /username|full_name|biography|profile_pic_url|web_profile_info|follower_count|edge_followed_by|shortcode|comment_count|comments_count|edge_media_to_comment|edge_media_to_parent_comment|like_count|likes_count|display_url|video_url/i.test(body);
+    return /username|full_name|biography|profile_pic_url|web_profile_info|follower_count|edge_followed_by|shortcode|comment_count|comments_count|edge_media_to_comment|edge_media_to_parent_comment|like_count|likes_count|display_url|video_url|content_text|threaded_comments|parent_comment_id|unauthorized logged out query/i.test(body);
+}
+
+function detectLoggedOutCommentRestriction(responses: CapturedResponsePayload[]): boolean {
+    return responses.some((response) => containsUnauthorizedLoggedOutQuery(response.payload));
+}
+
+function containsUnauthorizedLoggedOutQuery(root: unknown): boolean {
+    const visited = new WeakSet<object>();
+    const stack: unknown[] = [root];
+    let explored = 0;
+
+    while (stack.length > 0 && explored < 25_000) {
+        const current = stack.pop();
+        explored += 1;
+
+        if (typeof current === 'string') {
+            if (current.toLowerCase().includes('unauthorized logged out query')) {
+                return true;
+            }
+
+            continue;
+        }
+
+        if (!current || typeof current !== 'object') {
+            continue;
+        }
+
+        if (visited.has(current)) {
+            continue;
+        }
+
+        visited.add(current);
+
+        if (Array.isArray(current)) {
+            for (const value of current) {
+                stack.push(value);
+            }
+            continue;
+        }
+
+        for (const value of Object.values(current)) {
+            stack.push(value);
+        }
+    }
+
+    return false;
 }
 
 async function extractProfile(options: {
@@ -1148,7 +1254,7 @@ async function loadVisibleComments(
 
     let stableRounds = 0;
 
-    for (let iteration = 0; iteration < 6; iteration += 1) {
+    for (let iteration = 0; iteration < 10; iteration += 1) {
         await dismissInstagramLoginModal(page, crawlerLog);
         await dismissInstagramCookieBanner(page, crawlerLog);
 
@@ -1252,7 +1358,7 @@ async function clickCommentExpansionControls(
     crawlerLog: { debug: (message: string) => void },
 ): Promise<boolean> {
     let clicked = false;
-    const matcher = /view all.*comments|more comments|load more comments|view replies|more replies|load more replies/i;
+    const matcher = /view all.*comments|more comments|load more comments/i;
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
         const controls = page
@@ -1269,7 +1375,6 @@ async function clickCommentExpansionControls(
             }
 
             const label = await control.innerText().catch(() => '');
-            await control.scrollIntoViewIfNeeded().catch(() => undefined);
 
             let didClick = await control.click({ timeout: 1_500, force: true }).then(() => true).catch(() => false);
             if (!didClick) {
@@ -1306,34 +1411,88 @@ async function clickCommentExpansionControls(
 
 async function scrollCommentContainers(page: Page): Promise<boolean> {
     return page.evaluate(() => {
-        let didScroll = false;
-        const candidates = Array.from(document.querySelectorAll('article, main, section, div[role="dialog"], div'))
-            .filter((element): element is HTMLElement => element instanceof HTMLElement);
+        const normalizeWhitespace = (value: string | null | undefined) => value?.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim() || '';
+        const hasRenderableSize = (element: Element | null | undefined): element is HTMLElement => {
+            if (!(element instanceof HTMLElement)) {
+                return false;
+            }
 
-        for (const element of candidates) {
             const style = window.getComputedStyle(element);
-            if (!/(auto|scroll)/.test(style.overflowY)) {
-                continue;
+            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
+                return false;
             }
 
-            if (element.scrollHeight <= element.clientHeight + 32 || element.clientHeight < 120) {
-                continue;
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        };
+        const isScrollable = (element: HTMLElement) => {
+            const style = window.getComputedStyle(element);
+            return /(auto|scroll)/.test(`${style.overflowY} ${style.overflow}`) && element.scrollHeight > element.clientHeight + 32 && element.clientHeight >= 120;
+        };
+        const findScrollableAncestor = (start: Element | null | undefined) => {
+            let current = start?.parentElement ?? null;
+            while (current) {
+                if (isScrollable(current)) {
+                    return current;
+                }
+
+                current = current.parentElement;
             }
 
-            const before = element.scrollTop;
-            element.scrollTop = Math.min(element.scrollTop + Math.max(element.clientHeight * 0.85, 800), element.scrollHeight);
-            if (element.scrollTop !== before) {
-                didScroll = true;
+            return null;
+        };
+        const scoreScrollable = (element: HTMLElement) => {
+            const rect = element.getBoundingClientRect();
+            const text = normalizeWhitespace(element.innerText || element.textContent);
+            const visibleTimes = Array.from(element.querySelectorAll('time'))
+                .filter((candidate) => hasRenderableSize(candidate))
+                .length;
+            const visibleAvatars = Array.from(element.querySelectorAll('img[alt*="profile picture" i]'))
+                .filter((candidate) => hasRenderableSize(candidate))
+                .length;
+
+            let score = 0;
+            score += Math.min(visibleTimes, 12) * 3;
+            score += Math.min(visibleAvatars, 12) * 2;
+            if (/load more comments|reply|view replies|like/i.test(text)) {
+                score += 24;
+            }
+            if (rect.height >= 180 && rect.height <= window.innerHeight * 0.9) {
+                score += 12;
+            }
+            if (element.scrollHeight > element.clientHeight * 1.5) {
+                score += 8;
+            }
+            if (element.clientHeight >= window.innerHeight * 0.85) {
+                score -= 6;
+            }
+            return score;
+        };
+
+        const loadMoreControl = Array.from(document.querySelectorAll('button, [role="button"], a'))
+            .find((element) => hasRenderableSize(element) && /load more comments|view all.*comments|more comments/i.test(normalizeWhitespace(element.textContent)));
+        const preferredScrollBox = findScrollableAncestor(loadMoreControl);
+
+        const candidateScrollBoxes = Array.from(document.querySelectorAll('article, main, section, div[role="dialog"], div'))
+            .filter((element): element is HTMLElement => element instanceof HTMLElement)
+            .filter(isScrollable)
+            .sort((a, b) => scoreScrollable(b) - scoreScrollable(a));
+
+        const target = preferredScrollBox ?? candidateScrollBoxes[0];
+        if (target) {
+            const before = target.scrollTop;
+            const maxScrollTop = Math.max(target.scrollHeight - target.clientHeight, 0);
+            const step = Math.max(Math.round(target.clientHeight * 0.82), 260);
+            target.scrollTop = Math.min(before + step, maxScrollTop);
+            target.dispatchEvent(new Event('scroll', { bubbles: true }));
+            if (target.scrollTop !== before) {
+                return true;
             }
         }
 
         const windowBefore = window.scrollY;
         window.scrollBy(0, Math.max(window.innerHeight * 0.8, 900));
-        if (window.scrollY !== windowBefore) {
-            didScroll = true;
-        }
-
-        return didScroll;
+        return window.scrollY !== windowBefore;
     });
 }
 

@@ -244,11 +244,33 @@ export function dedupeTargets<T extends { kind: string; normalizedUrl: string }>
 }
 
 export function safeJsonParse(value: string): unknown {
-    try {
-        return JSON.parse(value);
-    } catch {
-        return null;
+    const normalizedCandidates = new Set<string>();
+    const queue: string[] = [value.trim()];
+
+    while (queue.length > 0) {
+        const candidate = queue.shift()?.trim();
+        if (!candidate || normalizedCandidates.has(candidate)) {
+            continue;
+        }
+
+        normalizedCandidates.add(candidate);
+
+        try {
+            return JSON.parse(candidate);
+        } catch {
+            const withoutForLoop = candidate.replace(/^for\s*\(;;\);\s*/, '').trim();
+            if (withoutForLoop !== candidate) {
+                queue.push(withoutForLoop);
+            }
+
+            const withoutXssiPrefix = candidate.replace(/^\)\]\}'?,?\s*/, '').trim();
+            if (withoutXssiPrefix !== candidate) {
+                queue.push(withoutXssiPrefix);
+            }
+        }
     }
+
+    return null;
 }
 
 export function sanitizeProxyUrl(proxyUrl: string): string {
