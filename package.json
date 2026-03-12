@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Apify Actor for scraping Instagram profiles from a list of profile URLs.",
+  "description": "Apify Actor for scraping Instagram profiles and post URLs.",
   "scripts": {
     "build": "tsc",
     "start": "tsx src/main.ts",

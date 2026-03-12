@@ -11,11 +11,24 @@ export interface JsonObject {
     [key: string]: JsonValue | undefined;
 }
 
+export type PostPathSegment = 'p' | 'reel' | 'reels' | 'tv';
+
 export interface NormalizedProfileTarget {
+    kind: 'profile';
     originalUrl: string;
     normalizedUrl: string;
     usernameHint: string;
 }
+
+export interface NormalizedPostTarget {
+    kind: 'post';
+    originalUrl: string;
+    normalizedUrl: string;
+    shortcodeHint: string;
+    mediaPath: PostPathSegment;
+}
+
+export type NormalizedInstagramTarget = NormalizedProfileTarget | NormalizedPostTarget;
 
 export interface RecentPost {
     id?: string;
@@ -49,6 +62,41 @@ export interface ExtractedProfile {
     score: number;
 }
 
+export interface PostComment {
+    id?: string;
+    username?: string;
+    fullName?: string;
+    text: string;
+    likeCount?: number;
+    takenAtTimestamp?: number;
+    profileUrl?: string;
+    isReply?: boolean;
+}
+
+export interface ExtractedPost {
+    shortcode: string;
+    url?: string;
+    mediaPath?: PostPathSegment;
+    ownerUsername?: string;
+    ownerFullName?: string;
+    caption?: string;
+    likesCount?: number;
+    commentsCount?: number;
+    viewsCount?: number;
+    playCount?: number;
+    isVideo?: boolean;
+    mediaType?: string;
+    displayUrl?: string;
+    thumbnailUrl?: string;
+    videoUrl?: string;
+    takenAtTimestamp?: number;
+    locationName?: string;
+    visibleComments?: PostComment[];
+    source: string;
+    sourcePath?: string;
+    score: number;
+}
+
 export interface DomSnapshot {
     title: string;
     url: string;
@@ -60,8 +108,13 @@ export interface DomSnapshot {
     html: string;
 }
 
-interface SearchResult {
+interface ProfileSearchResult {
     profile: ExtractedProfile;
+    rawObject: JsonObject;
+}
+
+interface PostSearchResult {
+    post: ExtractedPost;
     rawObject: JsonObject;
 }
 
@@ -73,6 +126,7 @@ const scrapeInstagramMetadata = metascraper([
     metascraperUrl(),
 ]);
 
+const POST_PATH_SEGMENTS = new Set<PostPathSegment>(['p', 'reel', 'reels', 'tv']);
 const RESERVED_PATH_SEGMENTS = new Set([
     '',
     'accounts',
@@ -90,6 +144,7 @@ const RESERVED_PATH_SEGMENTS = new Set([
 ]);
 
 const USERNAME_PATTERN = /^[a-zA-Z0-9._]{1,30}$/;
+const SHORTCODE_PATTERN = /^[a-zA-Z0-9_-]{5,80}$/;
 
 export function normalizeProfileUrl(rawUrl: string): NormalizedProfileTarget {
     const candidate = rawUrl.trim();
@@ -122,22 +177,66 @@ export function normalizeProfileUrl(rawUrl: string): NormalizedProfileTarget {
     const normalizedUrl = `https://www.instagram.com/${username}/`;
 
     return {
+        kind: 'profile',
         originalUrl: rawUrl,
         normalizedUrl,
         usernameHint: username.toLowerCase(),
     };
 }
 
-export function dedupeTargets(targets: NormalizedProfileTarget[]): NormalizedProfileTarget[] {
+export function normalizePostUrl(rawUrl: string): NormalizedPostTarget {
+    const candidate = rawUrl.trim();
+    if (!candidate) {
+        throw new Error('Encountered an empty post URL.');
+    }
+
+    const withProtocol = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+    const parsed = new URL(withProtocol);
+    const hostname = parsed.hostname.replace(/^www\./, '').toLowerCase();
+
+    if (hostname !== 'instagram.com') {
+        throw new Error(`Unsupported hostname "${parsed.hostname}". Only instagram.com post URLs are accepted.`);
+    }
+
+    const segments = parsed.pathname
+        .split('/')
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+
+    let mediaPath = segments[0]?.toLowerCase();
+    let shortcode = segments[1] ?? '';
+
+    if (mediaPath === '_u') {
+        mediaPath = segments[1]?.toLowerCase();
+        shortcode = segments[2] ?? '';
+    }
+
+    if (!mediaPath || !POST_PATH_SEGMENTS.has(mediaPath as PostPathSegment) || !shortcode || !SHORTCODE_PATTERN.test(shortcode)) {
+        throw new Error(`Could not infer an Instagram post shortcode from "${rawUrl}".`);
+    }
+
+    const normalizedMediaPath = mediaPath as PostPathSegment;
+
+    return {
+        kind: 'post',
+        originalUrl: rawUrl,
+        normalizedUrl: `https://www.instagram.com/${normalizedMediaPath}/${shortcode}/`,
+        shortcodeHint: shortcode,
+        mediaPath: normalizedMediaPath,
+    };
+}
+
+export function dedupeTargets<T extends { kind: string; normalizedUrl: string }>(targets: T[]): T[] {
     const seen = new Set<string>();
-    const uniqueTargets: NormalizedProfileTarget[] = [];
+    const uniqueTargets: T[] = [];
 
     for (const target of targets) {
-        if (seen.has(target.normalizedUrl)) {
+        const dedupeKey = `${target.kind}:${target.normalizedUrl}`;
+        if (seen.has(dedupeKey)) {
             continue;
         }
 
-        seen.add(target.normalizedUrl);
+        seen.add(dedupeKey);
         uniqueTargets.push(target);
     }
 
@@ -181,7 +280,7 @@ export function extractProfileFromUnknown(
         maxRecentPosts?: number;
         source: string;
     },
-): SearchResult | null {
+): ProfileSearchResult | null {
     const best = findBestProfileCandidate(root, options.usernameHint);
     if (!best) {
         return null;
@@ -207,6 +306,47 @@ export function extractProfileFromUnknown(
 
     return {
         profile,
+        rawObject: best.rawObject,
+    };
+}
+
+export function extractPostFromUnknown(
+    root: unknown,
+    options: {
+        shortcodeHint?: string;
+        source: string;
+        includeVisibleComments?: boolean;
+        maxVisibleComments?: number;
+    },
+): PostSearchResult | null {
+    const best = findBestPostCandidate(root, options.shortcodeHint);
+    if (!best) {
+        return null;
+    }
+
+    const post = normalizePost(best.rawObject, {
+        source: options.source,
+        sourcePath: best.path,
+        shortcodeHint: options.shortcodeHint,
+        score: best.score,
+    });
+
+    if (!post) {
+        return null;
+    }
+
+    if (options.includeVisibleComments) {
+        const visibleComments = extractVisibleCommentsFromUnknown(root, options.maxVisibleComments, {
+            ownerUsername: post.ownerUsername,
+            caption: post.caption,
+        });
+        if (visibleComments.length > 0) {
+            post.visibleComments = visibleComments;
+        }
+    }
+
+    return {
+        post,
         rawObject: best.rawObject,
     };
 }
@@ -344,6 +484,56 @@ export async function extractProfileFromDownloadedPage(
     }
 
     return profile;
+}
+
+export function extractPostFromDownloadedPage(
+    snapshot: DomSnapshot,
+    options: {
+        shortcodeHint?: string;
+        mediaPathHint?: PostPathSegment;
+        includeVisibleComments?: boolean;
+        maxVisibleComments?: number;
+        source: string;
+    },
+): ExtractedPost | null {
+    const candidates: ExtractedPost[] = [];
+
+    const embeddedPayloads = extractEmbeddedJsonPayloads(snapshot.html, snapshot.jsonLd);
+    for (const payload of embeddedPayloads) {
+        const extracted = extractPostFromUnknown(payload.data, {
+            shortcodeHint: options.shortcodeHint,
+            source: `${options.source}-script`,
+            includeVisibleComments: options.includeVisibleComments,
+            maxVisibleComments: options.maxVisibleComments,
+        });
+
+        if (!extracted) {
+            continue;
+        }
+
+        extracted.post.sourcePath = payload.sourcePath + (extracted.post.sourcePath ? `.${extracted.post.sourcePath}` : '');
+        candidates.push(extracted.post);
+    }
+
+    const metaExtracted = extractPostFromMetaSnapshot(snapshot, options);
+    if (metaExtracted) {
+        candidates.push(metaExtracted);
+    }
+
+    if (candidates.length === 0) {
+        return null;
+    }
+
+    let mergedPost = candidates[0];
+    for (const candidate of candidates.slice(1)) {
+        if (candidate.shortcode !== mergedPost.shortcode) {
+            continue;
+        }
+
+        mergedPost = mergeDownloadedPosts(mergedPost, candidate);
+    }
+
+    return mergedPost;
 }
 
 export function extractProfileFromHtml(
@@ -582,6 +772,324 @@ function normalizeProfile(
     };
 }
 
+function findBestPostCandidate(root: unknown, shortcodeHint?: string): { rawObject: JsonObject; path?: string; score: number } | null {
+    const visited = new WeakSet<object>();
+    const stack: Array<{ value: unknown; path: string[] }> = [{ value: root, path: [] }];
+
+    let best: { rawObject: JsonObject; path?: string; score: number } | null = null;
+    let exploredNodes = 0;
+
+    while (stack.length > 0 && exploredNodes < 35_000) {
+        const current = stack.pop()!;
+        exploredNodes += 1;
+
+        if (!isJsonObject(current.value)) {
+            if (Array.isArray(current.value)) {
+                for (let index = current.value.length - 1; index >= 0; index -= 1) {
+                    stack.push({ value: current.value[index], path: current.path.concat(String(index)) });
+                }
+            }
+
+            continue;
+        }
+
+        if (visited.has(current.value)) {
+            continue;
+        }
+
+        visited.add(current.value);
+
+        const score = scoreRawPostCandidate(current.value, current.path, shortcodeHint);
+        if (!best || score > best.score) {
+            if (score > 0) {
+                best = {
+                    rawObject: current.value,
+                    path: current.path.join('.'),
+                    score,
+                };
+            }
+        }
+
+        for (const [key, value] of Object.entries(current.value)) {
+            if (value === undefined || value === null) {
+                continue;
+            }
+
+            stack.push({ value, path: current.path.concat(key) });
+        }
+    }
+
+    return best?.score && best.score >= 35 ? best : null;
+}
+
+function scoreRawPostCandidate(candidate: JsonObject, path: string[], shortcodeHint?: string): number {
+    const shortcode = extractPostShortcode(candidate);
+    const displayUrl = extractPostDisplayUrl(candidate);
+    const videoUrl = takeString([candidate.video_url, getNested(candidate, ['video_versions', 0, 'url'])]);
+    const ownerUsername = extractPostOwnerUsername(candidate);
+    const caption = extractPostCaptionText(candidate);
+    const commentsCount = extractPostCommentsCount(candidate);
+    const likesCount = extractPostLikesCount(candidate);
+    const takenAtTimestamp = takeNumber([
+        candidate.taken_at_timestamp,
+        candidate.taken_at,
+        candidate.created_at,
+    ]);
+
+    if (!shortcode && !displayUrl && !videoUrl) {
+        return 0;
+    }
+
+    let score = 20;
+
+    if (shortcodeHint) {
+        if (shortcode && shortcode === shortcodeHint) {
+            score += 50;
+        } else {
+            score -= 25;
+        }
+    }
+
+    if (displayUrl) score += 15;
+    if (videoUrl) score += 10;
+    if (ownerUsername) score += 12;
+    if (caption) score += 8;
+    if (commentsCount !== undefined) score += 8;
+    if (likesCount !== undefined) score += 8;
+    if (takenAtTimestamp !== undefined) score += 6;
+
+    const joinedPath = path.join('.').toLowerCase();
+    if (joinedPath.includes('shortcode_media')) score += 30;
+    if (joinedPath.includes('xdt_shortcode_media')) score += 25;
+    if (joinedPath.includes('media')) score += 15;
+    if (joinedPath.includes('graphql')) score += 10;
+    if (joinedPath.includes('items.0')) score += 12;
+    if (joinedPath.includes('comment')) score -= 18;
+    if (joinedPath.includes('caption')) score -= 10;
+    if (joinedPath.includes('owner')) score -= 5;
+
+    return score;
+}
+
+function normalizePost(
+    candidate: JsonObject,
+    options: {
+        source: string;
+        sourcePath?: string;
+        shortcodeHint?: string;
+        score: number;
+    },
+): ExtractedPost | null {
+    const shortcode = extractPostShortcode(candidate) ?? options.shortcodeHint;
+    if (!shortcode || !SHORTCODE_PATTERN.test(shortcode)) {
+        return null;
+    }
+
+    if (options.shortcodeHint && shortcode !== options.shortcodeHint && options.score < 75) {
+        return null;
+    }
+
+    const mediaPath = inferPostMediaPath(candidate);
+    const ownerUsername = extractPostOwnerUsername(candidate);
+    const caption = extractPostCaptionText(candidate);
+    const mediaType = takeNumber([candidate.media_type]);
+    const typename = takeString([candidate.__typename, candidate.product_type])?.toLowerCase();
+    const explicitIsVideo = takeBoolean([candidate.is_video]);
+    const isVideo = explicitIsVideo
+        ?? (mediaType === 2 ? true : undefined)
+        ?? (typename?.includes('video') ? true : undefined);
+
+    return {
+        shortcode,
+        url: mediaPath ? `https://www.instagram.com/${mediaPath}/${shortcode}/` : `https://www.instagram.com/p/${shortcode}/`,
+        mediaPath,
+        ownerUsername,
+        ownerFullName: takeString([
+            candidate.full_name,
+            candidate.owner_full_name,
+            candidate.name,
+            getNested(candidate, ['owner', 'full_name']),
+            getNested(candidate, ['user', 'full_name']),
+        ]),
+        caption,
+        likesCount: extractPostLikesCount(candidate),
+        commentsCount: extractPostCommentsCount(candidate),
+        viewsCount: takeNumber([
+            candidate.view_count,
+            getNested(candidate, ['video_view_count']),
+            getNested(candidate, ['play_count']),
+        ]),
+        playCount: takeNumber([
+            candidate.play_count,
+            getNested(candidate, ['video_play_count']),
+        ]),
+        isVideo,
+        mediaType: takeString([
+            candidate.product_type,
+            candidate.__typename,
+            typeof candidate.media_type === 'number' ? String(candidate.media_type) : undefined,
+        ]),
+        displayUrl: extractPostDisplayUrl(candidate),
+        thumbnailUrl: takeString([
+            candidate.thumbnail_src,
+            getNested(candidate, ['thumbnail_resources', 0, 'src']),
+            extractPostDisplayUrl(candidate),
+        ]),
+        videoUrl: takeString([
+            candidate.video_url,
+            getNested(candidate, ['video_versions', 0, 'url']),
+        ]),
+        takenAtTimestamp: normalizeTimestamp(takeNumber([
+            candidate.taken_at_timestamp,
+            candidate.taken_at,
+            candidate.created_at,
+        ])),
+        locationName: takeString([
+            getNested(candidate, ['location', 'name']),
+            getNested(candidate, ['location', 'short_name']),
+        ]),
+        source: options.source,
+        sourcePath: options.sourcePath,
+        score: options.score,
+    };
+}
+
+function extractVisibleCommentsFromUnknown(
+    root: unknown,
+    maxVisibleComments?: number,
+    options?: {
+        ownerUsername?: string;
+        caption?: string;
+    },
+): PostComment[] {
+    const visited = new WeakSet<object>();
+    const stack: Array<{ value: unknown; path: string[] }> = [{ value: root, path: [] }];
+    const comments: PostComment[] = [];
+    const seen = new Set<string>();
+    const normalizedCaption = normalizeWhitespace(options?.caption);
+    const limit = maxVisibleComments ?? Number.MAX_SAFE_INTEGER;
+    let exploredNodes = 0;
+
+    while (stack.length > 0 && comments.length < limit && exploredNodes < 50_000) {
+        const current = stack.pop()!;
+        exploredNodes += 1;
+
+        if (!isJsonObject(current.value)) {
+            if (Array.isArray(current.value)) {
+                for (let index = current.value.length - 1; index >= 0; index -= 1) {
+                    stack.push({ value: current.value[index], path: current.path.concat(String(index)) });
+                }
+            }
+
+            continue;
+        }
+
+        if (visited.has(current.value)) {
+            continue;
+        }
+
+        visited.add(current.value);
+
+        const score = scoreRawCommentCandidate(current.value, current.path);
+        if (score >= 25) {
+            const comment = normalizePostComment(current.value, current.path);
+            if (comment) {
+                if (
+                    normalizedCaption
+                    && options?.ownerUsername
+                    && comment.username === options.ownerUsername
+                    && normalizeWhitespace(comment.text) === normalizedCaption
+                ) {
+                    continue;
+                }
+
+                const key = comment.id
+                    ?? `${comment.username ?? 'unknown'}:${normalizeWhitespace(comment.text)}:${comment.takenAtTimestamp ?? ''}`;
+
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    comments.push(comment);
+                }
+            }
+        }
+
+        for (const [key, value] of Object.entries(current.value)) {
+            if (value === undefined || value === null) {
+                continue;
+            }
+
+            stack.push({ value, path: current.path.concat(key) });
+        }
+    }
+
+    return comments.slice(0, limit);
+}
+
+function scoreRawCommentCandidate(candidate: JsonObject, path: string[]): number {
+    const text = extractCommentText(candidate);
+    if (!text) {
+        return 0;
+    }
+
+    let score = 10;
+
+    if (extractCommentUsername(candidate)) score += 12;
+    if (takeString([candidate.id, candidate.pk, candidate.comment_id])) score += 8;
+    if (takeNumber([candidate.created_at, candidate.created_at_utc, candidate.created_at_ts])) score += 5;
+    if (takeNumber([candidate.comment_like_count, candidate.like_count])) score += 4;
+
+    const joinedPath = path.join('.').toLowerCase();
+    if (joinedPath.includes('comment')) score += 20;
+    if (joinedPath.includes('reply')) score += 10;
+    if (joinedPath.includes('preview')) score += 5;
+    if (joinedPath.includes('caption')) score -= 25;
+    if (joinedPath.includes('media')) score -= 5;
+
+    if (extractPostShortcode(candidate) || extractPostDisplayUrl(candidate) || takeString([candidate.profile_pic_url, candidate.profile_pic_url_hd])) {
+        score -= 20;
+    }
+
+    return score;
+}
+
+function normalizePostComment(candidate: JsonObject, path: string[]): PostComment | null {
+    const text = normalizeWhitespace(extractCommentText(candidate));
+    if (!text) {
+        return null;
+    }
+
+    const username = extractCommentUsername(candidate);
+    const timestamp = normalizeTimestamp(takeNumber([
+        candidate.created_at,
+        candidate.created_at_utc,
+        candidate.created_at_ts,
+        candidate.taken_at,
+    ]));
+
+    return {
+        id: takeString([
+            candidate.id,
+            candidate.pk,
+            candidate.comment_id,
+            getNested(candidate, ['node', 'id']),
+        ]),
+        username,
+        fullName: takeString([
+            getNested(candidate, ['user', 'full_name']),
+            getNested(candidate, ['owner', 'full_name']),
+        ]),
+        text,
+        likeCount: takeNumber([
+            candidate.comment_like_count,
+            candidate.like_count,
+            getNested(candidate, ['edge_liked_by', 'count']),
+        ]),
+        takenAtTimestamp: timestamp,
+        profileUrl: username ? `https://www.instagram.com/${username}/` : undefined,
+        isReply: path.join('.').toLowerCase().includes('reply') || candidate.parent_comment_id !== undefined,
+    };
+}
+
 function extractRecentPosts(root: unknown, maxRecentPosts: number, usernameHint?: string): RecentPost[] {
     const visited = new WeakSet<object>();
     const stack: unknown[] = [root];
@@ -706,6 +1214,304 @@ function normalizeRecentPost(candidate: JsonObject, usernameHint?: string): Rece
     };
 }
 
+function extractPostShortcode(candidate: JsonObject): string | undefined {
+    const shortcode = takeString([
+        candidate.shortcode,
+        candidate.code,
+        getNested(candidate, ['node', 'shortcode']),
+        getNested(candidate, ['media', 'shortcode']),
+        getNested(candidate, ['shortcode_media', 'shortcode']),
+    ]);
+
+    return shortcode && SHORTCODE_PATTERN.test(shortcode) ? shortcode : undefined;
+}
+
+function inferPostMediaPath(candidate: JsonObject): PostPathSegment | undefined {
+    const productType = takeString([candidate.product_type])?.toLowerCase();
+    if (productType === 'clips') {
+        return 'reel';
+    }
+
+    if (productType === 'igtv') {
+        return 'tv';
+    }
+
+    return undefined;
+}
+
+function extractPostOwnerUsername(candidate: JsonObject): string | undefined {
+    const username = takeString([
+        candidate.username,
+        candidate.owner_username,
+        getNested(candidate, ['owner', 'username']),
+        getNested(candidate, ['user', 'username']),
+        getNested(candidate, ['caption', 'user', 'username']),
+    ])?.toLowerCase();
+
+    return username && USERNAME_PATTERN.test(username) ? username : undefined;
+}
+
+function extractPostCaptionText(candidate: JsonObject): string | undefined {
+    const caption = takeString([
+        getNested(candidate, ['edge_media_to_caption', 'edges', 0, 'node', 'text']),
+        getNested(candidate, ['caption', 'text']),
+        typeof candidate.caption === 'string' ? candidate.caption : undefined,
+        getNested(candidate, ['node', 'text']),
+    ]);
+
+    return normalizeWhitespace(caption);
+}
+
+function extractPostDisplayUrl(candidate: JsonObject): string | undefined {
+    return takeString([
+        candidate.display_url,
+        candidate.display_src,
+        candidate.thumbnail_src,
+        getNested(candidate, ['image_versions2', 'candidates', 0, 'url']),
+        getNested(candidate, ['carousel_media', 0, 'image_versions2', 'candidates', 0, 'url']),
+    ]);
+}
+
+function extractPostCommentsCount(candidate: JsonObject): number | undefined {
+    return takeNumber([
+        candidate.comment_count,
+        candidate.comments_count,
+        candidate.preview_comment_count,
+        getNested(candidate, ['edge_media_to_parent_comment', 'count']),
+        getNested(candidate, ['edge_media_to_comment', 'count']),
+    ]);
+}
+
+function extractPostLikesCount(candidate: JsonObject): number | undefined {
+    return takeNumber([
+        candidate.like_count,
+        candidate.likes_count,
+        getNested(candidate, ['edge_media_preview_like', 'count']),
+        getNested(candidate, ['edge_liked_by', 'count']),
+    ]);
+}
+
+function extractCommentText(candidate: JsonObject): string | undefined {
+    return takeString([
+        candidate.text,
+        getNested(candidate, ['node', 'text']),
+        getNested(candidate, ['content_text']),
+        getNested(candidate, ['caption', 'text']),
+    ]);
+}
+
+function extractCommentUsername(candidate: JsonObject): string | undefined {
+    const username = takeString([
+        getNested(candidate, ['user', 'username']),
+        getNested(candidate, ['owner', 'username']),
+        getNested(candidate, ['node', 'owner', 'username']),
+    ])?.toLowerCase();
+
+    return username && USERNAME_PATTERN.test(username) ? username : undefined;
+}
+
+function extractEmbeddedJsonPayloads(
+    html: string,
+    jsonLd: string[],
+): Array<{ data: unknown; sourcePath: string }> {
+    const payloads: Array<{ data: unknown; sourcePath: string }> = [];
+    const seenBodies = new Set<string>();
+
+    const scriptMatches = html.matchAll(/<script\b[^>]*type=(?:"|')(application\/json|application\/ld\+json)(?:"|')[^>]*>([\s\S]*?)<\/script>/gi);
+    let index = 0;
+    for (const match of scriptMatches) {
+        const body = match[2]?.trim();
+        if (!body || body.length > 2_000_000 || seenBodies.has(body)) {
+            index += 1;
+            continue;
+        }
+
+        seenBodies.add(body);
+        const parsed = safeJsonParse(body);
+        if (parsed !== null) {
+            payloads.push({
+                data: parsed,
+                sourcePath: `html-script-${index}`,
+            });
+        }
+
+        index += 1;
+    }
+
+    for (const [jsonLdIndex, body] of jsonLd.entries()) {
+        const trimmed = body.trim();
+        if (!trimmed || trimmed.length > 500_000 || seenBodies.has(trimmed)) {
+            continue;
+        }
+
+        seenBodies.add(trimmed);
+        const parsed = safeJsonParse(trimmed);
+        if (parsed !== null) {
+            payloads.push({
+                data: parsed,
+                sourcePath: `jsonld-${jsonLdIndex}`,
+            });
+        }
+    }
+
+    return payloads;
+}
+
+function extractPostFromMetaSnapshot(
+    snapshot: DomSnapshot,
+    options: {
+        shortcodeHint?: string;
+        mediaPathHint?: PostPathSegment;
+        source: string;
+    },
+): ExtractedPost | null {
+    const decodedDescription = decodeHtmlEntities(
+        takeString([
+            snapshot.meta['og:description'],
+            snapshot.meta.description,
+            snapshot.meta['twitter:description'],
+        ]),
+    );
+    const decodedTitle = decodeHtmlEntities(
+        takeString([
+            snapshot.meta['og:title'],
+            snapshot.meta.title,
+            snapshot.title,
+        ]),
+    );
+    const displayUrl = decodeHtmlEntities(
+        takeString([
+            snapshot.meta['og:image'],
+            snapshot.meta['twitter:image'],
+        ]),
+    );
+    const videoUrl = decodeHtmlEntities(
+        takeString([
+            snapshot.meta['og:video'],
+            snapshot.meta['og:video:secure_url'],
+            snapshot.meta['twitter:player:stream'],
+        ]),
+    );
+
+    const descriptionText = decodedDescription ?? '';
+    const titleText = decodedTitle ?? '';
+    const shortcode = options.shortcodeHint ?? extractShortcodeFromPostUrl(snapshot.url);
+    const ownerUsername = extractOwnerUsernameFromPostMeta(descriptionText);
+    const ownerFullName = extractOwnerFullNameFromPostMeta(titleText);
+    const caption = extractCaptionFromPostMeta(descriptionText, titleText);
+    const likesCount = extractCountFromLabel(descriptionText, 'likes?');
+    const commentsCount = extractCountFromLabel(descriptionText, 'comments?');
+    const takenAtTimestamp = extractTimestampFromPostMeta(descriptionText);
+    const mediaPath = options.mediaPathHint ?? extractMediaPathFromPostUrl(snapshot.url);
+    const isVideo = videoUrl ? true : undefined;
+
+    if (
+        !shortcode
+        && !ownerUsername
+        && !ownerFullName
+        && !caption
+        && likesCount === undefined
+        && commentsCount === undefined
+        && !displayUrl
+        && !videoUrl
+    ) {
+        return null;
+    }
+
+    return {
+        shortcode: shortcode ?? snapshot.url,
+        url: shortcode ? `https://www.instagram.com/${mediaPath ?? 'p'}/${shortcode}/` : snapshot.url,
+        mediaPath,
+        ownerUsername,
+        ownerFullName,
+        caption,
+        likesCount,
+        commentsCount,
+        isVideo,
+        mediaType: isVideo ? 'video' : (displayUrl ? 'image' : undefined),
+        displayUrl,
+        thumbnailUrl: displayUrl,
+        videoUrl,
+        takenAtTimestamp,
+        source: `${options.source}-meta`,
+        score: 60
+            + (caption ? 12 : 0)
+            + (likesCount !== undefined ? 8 : 0)
+            + (commentsCount !== undefined ? 8 : 0)
+            + (displayUrl ? 6 : 0),
+    };
+}
+
+function mergeDownloadedPosts(base: ExtractedPost, candidate: ExtractedPost): ExtractedPost {
+    const primary = downloadedPostRichnessScore(base) >= downloadedPostRichnessScore(candidate) ? base : candidate;
+    const secondary = primary === base ? candidate : base;
+
+    return {
+        shortcode: primary.shortcode,
+        url: primary.url ?? secondary.url,
+        mediaPath: primary.mediaPath ?? secondary.mediaPath,
+        ownerUsername: primary.ownerUsername ?? secondary.ownerUsername,
+        ownerFullName: primary.ownerFullName ?? secondary.ownerFullName,
+        caption: primary.caption ?? secondary.caption,
+        likesCount: primary.likesCount ?? secondary.likesCount,
+        commentsCount: primary.commentsCount ?? secondary.commentsCount,
+        viewsCount: primary.viewsCount ?? secondary.viewsCount,
+        playCount: primary.playCount ?? secondary.playCount,
+        isVideo: primary.isVideo ?? secondary.isVideo,
+        mediaType: primary.mediaType ?? secondary.mediaType,
+        displayUrl: primary.displayUrl ?? secondary.displayUrl,
+        thumbnailUrl: primary.thumbnailUrl ?? secondary.thumbnailUrl,
+        videoUrl: primary.videoUrl ?? secondary.videoUrl,
+        takenAtTimestamp: primary.takenAtTimestamp ?? secondary.takenAtTimestamp,
+        locationName: primary.locationName ?? secondary.locationName,
+        visibleComments: mergeDownloadedComments(primary.visibleComments, secondary.visibleComments),
+        source: primary.source,
+        sourcePath: primary.sourcePath ?? secondary.sourcePath,
+        score: Math.max(primary.score, secondary.score),
+    };
+}
+
+function downloadedPostRichnessScore(post: ExtractedPost): number {
+    let score = 0;
+    if (post.ownerUsername) score += 2;
+    if (post.ownerFullName) score += 1;
+    if (post.caption) score += 3;
+    if (post.likesCount !== undefined) score += 2;
+    if (post.commentsCount !== undefined) score += 2;
+    if (post.displayUrl) score += 2;
+    if (post.videoUrl) score += 2;
+    if (post.takenAtTimestamp !== undefined) score += 1;
+    if (post.visibleComments?.length) score += Math.min(post.visibleComments.length, 5);
+    return score;
+}
+
+function mergeDownloadedComments(primary: PostComment[] | undefined, secondary: PostComment[] | undefined): PostComment[] | undefined {
+    const merged = new Map<string, PostComment>();
+
+    for (const comment of [...(primary ?? []), ...(secondary ?? [])]) {
+        const key = comment.id ?? `${comment.username ?? 'unknown'}:${comment.text}:${comment.takenAtTimestamp ?? ''}`;
+        const existing = merged.get(key);
+        if (!existing) {
+            merged.set(key, comment);
+            continue;
+        }
+
+        merged.set(key, {
+            id: existing.id ?? comment.id,
+            username: existing.username ?? comment.username,
+            fullName: existing.fullName ?? comment.fullName,
+            text: existing.text || comment.text,
+            likeCount: existing.likeCount ?? comment.likeCount,
+            takenAtTimestamp: existing.takenAtTimestamp ?? comment.takenAtTimestamp,
+            profileUrl: existing.profileUrl ?? comment.profileUrl,
+            isReply: existing.isReply ?? comment.isReply,
+        });
+    }
+
+    const values = Array.from(merged.values());
+    return values.length > 0 ? values : undefined;
+}
+
 function extractProfileFieldsFromHtml(html: string, usernameHint?: string): Omit<ExtractedProfile, 'source' | 'score'> | null {
     const username = usernameHint ?? extractEscapedString(html, 'username');
     if (!username) {
@@ -793,6 +1599,32 @@ function extractCountsFromText(text: string): {
     return { postsCount, followersCount, followingCount };
 }
 
+function extractShortcodeFromPostUrl(url: string): string | undefined {
+    try {
+        const parsed = new URL(url);
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        const mediaPath = segments[0]?.toLowerCase();
+        const shortcode = segments[1];
+        if (!mediaPath || !POST_PATH_SEGMENTS.has(mediaPath as PostPathSegment)) {
+            return undefined;
+        }
+
+        return shortcode && SHORTCODE_PATTERN.test(shortcode) ? shortcode : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function extractMediaPathFromPostUrl(url: string): PostPathSegment | undefined {
+    try {
+        const parsed = new URL(url);
+        const segment = parsed.pathname.split('/').filter(Boolean)[0]?.toLowerCase();
+        return segment && POST_PATH_SEGMENTS.has(segment as PostPathSegment) ? segment as PostPathSegment : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 function extractCountFromLabel(text: string, labelPattern: string): number | undefined {
     const regex = new RegExp(`([0-9.,]+(?:\\s*[KMB])?)\\s+${labelPattern}`, 'i');
     const match = text.match(regex);
@@ -851,6 +1683,45 @@ function extractBiography(text: string, username: string, fullName?: string): st
     return undefined;
 }
 
+function extractOwnerUsernameFromPostMeta(text: string): string | undefined {
+    const match = text.match(/-\s*([a-zA-Z0-9._]{1,30})\s+on\s+/i);
+    return match?.[1]?.toLowerCase();
+}
+
+function extractOwnerFullNameFromPostMeta(text: string): string | undefined {
+    const normalized = text.trim();
+    if (!normalized) {
+        return undefined;
+    }
+
+    const match = normalized.match(/^(.*?)\s+on Instagram\s*:/i);
+    const candidate = match?.[1]?.trim();
+    return candidate || undefined;
+}
+
+function extractCaptionFromPostMeta(description: string, title: string): string | undefined {
+    const descriptionMatch = description.match(/:\s*(.+)$/s);
+    const titleMatch = title.match(/on Instagram\s*:\s*(.+)$/is);
+    const candidate = descriptionMatch?.[1] ?? titleMatch?.[1];
+    if (!candidate) {
+        return undefined;
+    }
+
+    return stripWrappingQuotes(candidate)
+        ?.replace(/\s+\.$/, '')
+        .trim() || undefined;
+}
+
+function extractTimestampFromPostMeta(text: string): number | undefined {
+    const match = text.match(/\son\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})(?::|\s)/);
+    if (!match?.[1]) {
+        return undefined;
+    }
+
+    const timestamp = Date.parse(match[1]);
+    return Number.isFinite(timestamp) ? Math.floor(timestamp / 1_000) : undefined;
+}
+
 function extractUsernameFromUrl(url: string): string | undefined {
     try {
         const parsed = new URL(url);
@@ -904,6 +1775,45 @@ function decodeEscapedString(value: string): string {
     } catch {
         return value;
     }
+}
+
+function decodeHtmlEntities(value: string | undefined): string | undefined {
+    if (!value) {
+        return undefined;
+    }
+
+    return value.replace(/&(#x?[0-9a-f]+|quot|amp|apos|lt|gt);/gi, (match, entity: string) => {
+        const normalized = entity.toLowerCase();
+        if (normalized === 'quot') return '"';
+        if (normalized === 'amp') return '&';
+        if (normalized === 'apos') return '\'';
+        if (normalized === 'lt') return '<';
+        if (normalized === 'gt') return '>';
+        if (normalized.startsWith('#x')) {
+            const codePoint = Number.parseInt(normalized.slice(2), 16);
+            return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+        }
+        if (normalized.startsWith('#')) {
+            const codePoint = Number.parseInt(normalized.slice(1), 10);
+            return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+        }
+
+        return match;
+    });
+}
+
+function stripWrappingQuotes(value: string | undefined): string | undefined {
+    if (!value) {
+        return undefined;
+    }
+
+    const trimmed = value.trim();
+    const unwrapped = trimmed
+        .replace(/^["'“”‘’]+/, '')
+        .replace(/["'“”‘’]+\s*\.?$/, '')
+        .trim();
+
+    return unwrapped || undefined;
 }
 
 function takeString(values: unknown[]): string | undefined {
@@ -968,6 +1878,27 @@ function parseFlexibleNumber(value: string): number | undefined {
     }
 
     return Math.round(parsed * multiplier);
+}
+
+function normalizeTimestamp(value: number | undefined): number | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (value > 1_000_000_000_000) {
+        return Math.floor(value / 1_000);
+    }
+
+    return value;
+}
+
+function normalizeWhitespace(value: string | undefined): string | undefined {
+    if (!value) {
+        return undefined;
+    }
+
+    const normalized = value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    return normalized || undefined;
 }
 
 function getNested(value: unknown, path: Array<string | number>): unknown {

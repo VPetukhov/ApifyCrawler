@@ -4,3 +4,5 @@ storage
 apify_storage
 .DS_Store
 nohup.out
+.apt
+.local-deps

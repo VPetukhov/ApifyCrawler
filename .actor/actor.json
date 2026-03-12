@@ -1,8 +1,8 @@
 {
   "actorSpecification": 1,
   "name": "instagram-profile-scraper",
-  "title": "Instagram Profile Scraper",
-  "description": "Scrape public Instagram profile metadata from a list of profile URLs with Apify proxies, sessions, and browser fingerprints.",
+  "title": "Instagram Profile and Post Scraper",
+  "description": "Scrape public Instagram profiles and posts, including visible comments, with Apify proxies, sessions, and browser fingerprints.",
   "version": "0.1",
   "buildTag": "latest",
   "env": {

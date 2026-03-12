@@ -1,17 +1,26 @@
 {
-  "title": "Instagram Profile Scraper input",
-  "description": "Provide one or more Instagram profile URLs. Use Apify Proxy or your own proxy group to reduce blocking. Optional cookies can help with login walls.",
+  "title": "Instagram Profile and Post Scraper input",
+  "description": "Provide Instagram profile URLs, post URLs, or both. Use Apify Proxy or your own proxy group to reduce blocking. Optional cookies can help with login walls.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "profileUrls": {
       "title": "Profile URLs",
       "type": "array",
-      "description": "A list of Instagram profile URLs, e.g. https://www.instagram.com/instagram/",
+      "description": "Optional list of Instagram profile URLs, e.g. https://www.instagram.com/instagram/",
       "editor": "stringList",
       "prefill": [
         "https://www.instagram.com/instagram/"
       ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "postUrls": {
+      "title": "Post URLs",
+      "type": "array",
+      "description": "Optional list of Instagram post/reel URLs, e.g. https://www.instagram.com/p/SHORTCODE/",
+      "editor": "stringList",
       "items": {
         "type": "string"
       }
@@ -54,7 +63,7 @@
     "maxItems": {
       "title": "Maximum results",
       "type": "integer",
-      "description": "Optional cap on the number of profiles to process from the input list.",
+      "description": "Optional cap on the total number of profile/post URLs to process from the input lists.",
       "minimum": 1
     },
     "useSessionPool": {
@@ -91,14 +100,29 @@
     "includeRecentPosts": {
       "title": "Include recent posts",
       "type": "boolean",
+      "description": "When scraping profile URLs, include recent post summaries when available.",
       "default": true
     },
     "maxRecentPosts": {
       "title": "Max recent posts",
       "type": "integer",
+      "description": "Maximum number of recent profile posts to keep per scraped profile.",
       "default": 12,
       "minimum": 1,
       "maximum": 24
+    },
+    "includeVisibleComments": {
+      "title": "Include visible comments",
+      "type": "boolean",
+      "description": "When scraping post URLs, collect visible comments from the page, including comments that load after scrolling.",
+      "default": true
+    },
+    "maxVisibleComments": {
+      "title": "Max visible comments",
+      "type": "integer",
+      "description": "Optional safety cap for visible comments per post. Leave empty to keep scrolling until no more visible comments can be loaded.",
+      "minimum": 1,
+      "maximum": 5000
     },
     "debugLogResponses": {
       "title": "Debug response capture",
@@ -106,8 +130,5 @@
       "default": false,
       "description": "Log matching Instagram JSON responses for debugging extraction issues."
     }
-  },
-  "required": [
-    "profileUrls"
-  ]
+  }
 }
