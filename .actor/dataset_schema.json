@@ -1,0 +1,131 @@
+{
+  "actorSpecification": 1,
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "flatten": [
+          "scrape"
+        ],
+        "fields": [
+          "targetType",
+          "inputUrl",
+          "normalizedUrl",
+          "loadedUrl",
+          "username",
+          "fullName",
+          "followersCount",
+          "followingCount",
+          "postsCount",
+          "shortcode",
+          "postUrl",
+          "ownerUsername",
+          "caption",
+          "likesCount",
+          "commentsCount",
+          "visibleCommentsCount",
+          "recentPosts",
+          "visibleComments",
+          "extractionSource",
+          "succeeded",
+          "errorMessages",
+          "retryCount",
+          "sessionRotationCount",
+          "scrape.scrapedAt",
+          "scrape.failedAt",
+          "scrape.httpStatus",
+          "scrape.proxy.url"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "targetType": {
+            "label": "Target type",
+            "format": "text"
+          },
+          "inputUrl": {
+            "label": "Input URL",
+            "format": "link"
+          },
+          "normalizedUrl": {
+            "label": "Normalized URL",
+            "format": "link"
+          },
+          "loadedUrl": {
+            "label": "Loaded URL",
+            "format": "link"
+          },
+          "followersCount": {
+            "label": "Followers",
+            "format": "number"
+          },
+          "followingCount": {
+            "label": "Following",
+            "format": "number"
+          },
+          "postsCount": {
+            "label": "Posts",
+            "format": "number"
+          },
+          "postUrl": {
+            "label": "Post URL",
+            "format": "link"
+          },
+          "likesCount": {
+            "label": "Likes",
+            "format": "number"
+          },
+          "commentsCount": {
+            "label": "Comments",
+            "format": "number"
+          },
+          "visibleCommentsCount": {
+            "label": "Visible comments",
+            "format": "number"
+          },
+          "recentPosts": {
+            "label": "Recent posts",
+            "format": "array"
+          },
+          "visibleComments": {
+            "label": "Visible comments payload",
+            "format": "array"
+          },
+          "succeeded": {
+            "label": "Succeeded",
+            "format": "boolean"
+          },
+          "errorMessages": {
+            "label": "Errors",
+            "format": "array"
+          },
+          "retryCount": {
+            "label": "Retries",
+            "format": "number"
+          },
+          "sessionRotationCount": {
+            "label": "Session rotations",
+            "format": "number"
+          },
+          "scrape.scrapedAt": {
+            "label": "Scraped at",
+            "format": "date"
+          },
+          "scrape.failedAt": {
+            "label": "Failed at",
+            "format": "date"
+          },
+          "scrape.httpStatus": {
+            "label": "HTTP status",
+            "format": "number"
+          },
+          "scrape.proxy.url": {
+            "label": "Proxy URL",
+            "format": "text"
+          }
+        }
+      }
+    }
+  }
+}

@@ -29,6 +29,12 @@
       "title": "Proxy configuration",
       "type": "object",
       "description": "Recommended for Instagram scraping. Configure Apify Proxy or custom proxies here.",
+      "prefill": {
+        "useApifyProxy": true
+      },
+      "default": {
+        "useApifyProxy": true
+      },
       "editor": "proxy"
     },
     "maxConcurrency": {
@@ -107,6 +113,7 @@
     "overrideUserAgent": {
       "title": "Override user agent",
       "type": "string",
+      "editor": "textfield",
       "description": "Optional user agent override. Leave empty to use browser fingerprints."
     },
     "includeRecentPosts": {

@@ -5,7 +5,11 @@
   "description": "Scrape public Instagram profiles and posts, including visible comments, with Apify proxies, sessions, and browser fingerprints.",
   "version": "0.1",
   "buildTag": "latest",
-  "env": {
+  "input": "./input_schema.json",
+  "storages": {
+    "dataset": "./dataset_schema.json"
+  },
+  "environmentVariables": {
     "CRAWLEE_HEADLESS": "1"
   }
 }
