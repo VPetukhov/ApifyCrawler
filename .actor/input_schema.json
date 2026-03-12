@@ -1,0 +1,113 @@
+{
+  "title": "Instagram Profile Scraper input",
+  "description": "Provide one or more Instagram profile URLs. Use Apify Proxy or your own proxy group to reduce blocking. Optional cookies can help with login walls.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "profileUrls": {
+      "title": "Profile URLs",
+      "type": "array",
+      "description": "A list of Instagram profile URLs, e.g. https://www.instagram.com/instagram/",
+      "editor": "stringList",
+      "prefill": [
+        "https://www.instagram.com/instagram/"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Recommended for Instagram scraping. Configure Apify Proxy or custom proxies here.",
+      "editor": "proxy"
+    },
+    "maxConcurrency": {
+      "title": "Max concurrency",
+      "type": "integer",
+      "description": "Upper concurrency limit for Playwright pages.",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 20
+    },
+    "requestTimeoutSecs": {
+      "title": "Request timeout (seconds)",
+      "type": "integer",
+      "default": 90,
+      "minimum": 15,
+      "maximum": 300
+    },
+    "navigationTimeoutSecs": {
+      "title": "Navigation timeout (seconds)",
+      "type": "integer",
+      "default": 60,
+      "minimum": 15,
+      "maximum": 180
+    },
+    "maxRequestRetries": {
+      "title": "Max request retries",
+      "type": "integer",
+      "default": 6,
+      "minimum": 0,
+      "maximum": 20
+    },
+    "maxItems": {
+      "title": "Maximum results",
+      "type": "integer",
+      "description": "Optional cap on the number of profiles to process from the input list.",
+      "minimum": 1
+    },
+    "useSessionPool": {
+      "title": "Use session pool",
+      "type": "boolean",
+      "default": true
+    },
+    "persistCookiesPerSession": {
+      "title": "Persist cookies per session",
+      "type": "boolean",
+      "default": true
+    },
+    "maxSessionRotations": {
+      "title": "Max session rotations",
+      "type": "integer",
+      "default": 12,
+      "minimum": 0,
+      "maximum": 50
+    },
+    "initialCookies": {
+      "title": "Initial cookies",
+      "type": "array",
+      "description": "Optional cookies to inject into each browser context before navigating. Useful when Instagram shows a login wall.",
+      "editor": "json",
+      "items": {
+        "type": "object"
+      }
+    },
+    "overrideUserAgent": {
+      "title": "Override user agent",
+      "type": "string",
+      "description": "Optional user agent override. Leave empty to use browser fingerprints."
+    },
+    "includeRecentPosts": {
+      "title": "Include recent posts",
+      "type": "boolean",
+      "default": true
+    },
+    "maxRecentPosts": {
+      "title": "Max recent posts",
+      "type": "integer",
+      "default": 12,
+      "minimum": 1,
+      "maximum": 24
+    },
+    "debugLogResponses": {
+      "title": "Debug response capture",
+      "type": "boolean",
+      "default": false,
+      "description": "Log matching Instagram JSON responses for debugging extraction issues."
+    }
+  },
+  "required": [
+    "profileUrls"
+  ]
+}

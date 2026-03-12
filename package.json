@@ -1,0 +1,29 @@
+{
+  "name": "instagram-profile-scraper-actor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Apify Actor for scraping Instagram profiles from a list of profile URLs.",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/main.ts",
+    "start:prod": "node dist/main.js",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "apify": "^3.6.1",
+    "crawlee": "^3.16.0",
+    "metascraper": "^5.49.25",
+    "metascraper-description": "^5.49.25",
+    "metascraper-image": "^5.49.25",
+    "metascraper-instagram": "^5.49.25",
+    "metascraper-title": "^5.49.25",
+    "metascraper-url": "^5.49.25",
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
